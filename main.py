@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from flask import Flask, request
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -11,14 +12,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram import F
 from openai import OpenAI
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types.update import Update
 
-dp = Dispatcher(storage=MemoryStorage())
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
 LLM_TOKEN = os.getenv("LLM_TOKEN")
+URL = os.getenv("webhook_path")
 HISTORY_MAX_LENGTH = 5000
 client = OpenAI(api_key=LLM_TOKEN, base_url="https://api.deepseek.com")
+
+app = Flask(__name__)
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+dp = Dispatcher(storage=MemoryStorage())
 
 with open("prompt.txt", "r") as f:
     init_message = f.read()
@@ -26,13 +32,21 @@ with open("prompt.txt", "r") as f:
 with open("system_prompt.txt", "r") as f:
     system_prompt = f.read()
 
+@app.route("/" + TOKEN, methods=["POST"])
+def webhook():
+    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                        level=logging.INFO)
+    update = Update.model_validate(request.json, context={"bot": bot})
+    asyncio.run(dp.feed_update(bot, update))
+    return "ok", 200
+
 @dp.message(Command("start"))
 async def command_start_handler(message: Message) -> None:
     await message.answer(init_message)
 
 @dp.message(Command("newchat"))
 async def reset_history(message: Message, state: FSMContext) -> None:
-    state.clear()
+    await state.clear()
     await message.answer("История была очищена! Можно начинать общение заново!")
 
 @dp.message(F.text & ~F.text.startswith('/'))
@@ -55,13 +69,5 @@ async def llm_caller(message: Message, state: FSMContext) -> None:
     await state.update_data(history=history)
     await message.answer(answer_text)
 
-async def main() -> None:
-    bot = Bot(token=TOKEN, 
-              default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
-    await dp.start_polling(bot)
-
-
 if __name__ == "__main__":
-    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                        level=logging.INFO)
-    asyncio.run(main())
+    app.run()
